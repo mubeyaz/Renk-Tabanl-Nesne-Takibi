@@ -7,6 +7,18 @@ Yeşil, Kırmızı, Mavi, Sarı nesneleri algılar ve etrafına kare çizer
 
 import cv2
 import numpy as np
+import sys
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Renk tanımlamaları (HSV)
 RENKLER = {
@@ -54,102 +66,182 @@ def cilt_maskesi_olustur(frame):
     return skin
 
 
-def main():
-    # Kamerayı aç
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        print("HATA: Kamera açılamadı!")
-        return
-    
-    # Kamera ayarları
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    
-    print("Renk Tabanlı Nesne Takip Sistemi başlatılıyor...")
-    print("Çıkmak için: 'q' tuşuna basın")
-    
-    while True:
-        ret, frame = cap.read()
+def frame_isle(frame):
+    frame = cv2.flip(frame, 1)
+
+    frame_blur = cv2.GaussianBlur(frame, (7, 7), 0)
+    hsv = cv2.cvtColor(frame_blur, cv2.COLOR_BGR2HSV)
+    cilt_maskesi = cilt_maskesi_olustur(frame_blur)
+
+    for renk_adi, renk_bilgisi in RENKLER.items():
+        mask = renk_maskesi_olustur(hsv, renk_bilgisi["ranges"])
+
+        if renk_adi == "Kirmizi":
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(cilt_maskesi))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.erode(mask, kernel, iterations=1)
+        mask = cv2.dilate(mask, kernel, iterations=1)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            alan = cv2.contourArea(contour)
+            if alan < MIN_ALAN or alan > MAX_ALAN:
+                continue
+
+            x, y, w, h = cv2.boundingRect(contour)
+            if h == 0 or w == 0:
+                continue
+
+            oran = w / float(h)
+            doluluk = alan / float(w * h)
+            if oran < 0.25 or oran > 4.0:
+                continue
+            if doluluk < 0.35:
+                continue
+
+            cv2.rectangle(frame, (x, y), (x + w, y + h), renk_bilgisi["BGR"], 2)
+            cv2.putText(
+                frame,
+                renk_adi,
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                renk_bilgisi["BGR"],
+                2,
+            )
+
+    cv2.putText(
+        frame,
+        "PyQt pencere - Kapatmak icin pencereyi kapat",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (200, 200, 200),
+        1,
+    )
+    return frame
+
+
+class RenkTakipPenceresi(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("PyQt Renk Takip")
+        self.resize(900, 700)
+        self.cap = None
+
+        self.video_label = QLabel("Kamera kapali. Baslat'a basin.")
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setStyleSheet(
+            "background-color: #0f172a; color: #e2e8f0; border-radius: 8px;"
+        )
+
+        self.durum_label = QLabel("Durum: Hazir")
+        self.durum_label.setStyleSheet("font-size: 14px; color: #0f172a;")
+
+        self.baslat_btn = QPushButton("Baslat")
+        self.baslat_btn.setCursor(Qt.PointingHandCursor)
+        self.baslat_btn.clicked.connect(self.kamerayi_baslat)
+        self.baslat_btn.setStyleSheet(
+            "QPushButton {background:#16a34a;color:white;padding:10px 20px;"
+            "border:none;border-radius:8px;font-weight:600;}"
+            "QPushButton:disabled {background:#86efac;color:#14532d;}"
+        )
+
+        self.durdur_btn = QPushButton("Durdur")
+        self.durdur_btn.setCursor(Qt.PointingHandCursor)
+        self.durdur_btn.clicked.connect(self.kamerayi_durdur)
+        self.durdur_btn.setEnabled(False)
+        self.durdur_btn.setStyleSheet(
+            "QPushButton {background:#dc2626;color:white;padding:10px 20px;"
+            "border:none;border-radius:8px;font-weight:600;}"
+            "QPushButton:disabled {background:#fecaca;color:#7f1d1d;}"
+        )
+
+        ana_widget = QWidget()
+        ana_widget.setStyleSheet("background-color: #f8fafc;")
+        duzen = QVBoxLayout(ana_widget)
+        duzen.setContentsMargins(16, 16, 16, 16)
+        duzen.setSpacing(12)
+
+        buton_duzeni = QHBoxLayout()
+        buton_duzeni.setSpacing(10)
+        buton_duzeni.addWidget(self.baslat_btn)
+        buton_duzeni.addWidget(self.durdur_btn)
+        buton_duzeni.addStretch()
+
+        duzen.addWidget(self.durum_label)
+        duzen.addLayout(buton_duzeni)
+        duzen.addWidget(self.video_label)
+        self.setCentralWidget(ana_widget)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.kare_guncelle)
+
+    def kamerayi_baslat(self):
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(0)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+
+        if not self.cap.isOpened():
+            self.durum_label.setText("Durum: Kamera acilamadi")
+            self.video_label.setText("HATA: Kamera acilamadi")
+            return
+
+        self.timer.start(30)
+        self.baslat_btn.setEnabled(False)
+        self.durdur_btn.setEnabled(True)
+        self.durum_label.setText("Durum: Kamera calisiyor")
+
+    def kamerayi_durdur(self):
+        if self.timer.isActive():
+            self.timer.stop()
+        if self.cap is not None and self.cap.isOpened():
+            self.cap.release()
+        self.cap = None
+        self.baslat_btn.setEnabled(True)
+        self.durdur_btn.setEnabled(False)
+        self.durum_label.setText("Durum: Kamera durduruldu")
+        self.video_label.setPixmap(QPixmap())
+        self.video_label.setText("Kamera kapali. Baslat'a basin.")
+
+    def kare_guncelle(self):
+        if self.cap is None or not self.cap.isOpened():
+            return
+
+        ret, frame = self.cap.read()
         if not ret:
-            print("HATA: Kare okunamadı")
-            break
-        
-        # Kareyi flip et (daha iyi görüş için)
-        frame = cv2.flip(frame, 1)
-        
-        # Gürültüyü azalt ve ardından HSV'ye dönüştür.
-        frame_blur = cv2.GaussianBlur(frame, (7, 7), 0)
-        hsv = cv2.cvtColor(frame_blur, cv2.COLOR_BGR2HSV)
-        cilt_maskesi = cilt_maskesi_olustur(frame_blur)
-        
-        # Her renk için nesne bul
-        for renk_adi, renk_bilgisi in RENKLER.items():
-            # Maske oluştur (tek veya çoklu HSV aralığı).
-            mask = renk_maskesi_olustur(hsv, renk_bilgisi["ranges"])
+            self.video_label.setText("HATA: Kare okunamadi")
+            return
 
-            # Kırmızıda cilt bölgelerini çıkar (yüz/ten yanlış pozitiflerini azaltır).
-            if renk_adi == "Kirmizi":
-                mask = cv2.bitwise_and(mask, cv2.bitwise_not(cilt_maskesi))
-            
-            # Morfolojik işlemler (gürültü azalt)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.erode(mask, kernel, iterations=1)
-            mask = cv2.dilate(mask, kernel, iterations=1)
-            
-            # Kontur bul
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Her kontürü işle
-            for contour in contours:
-                alan = cv2.contourArea(contour)
-                
-                # Alan filtresi
-                if alan < MIN_ALAN or alan > MAX_ALAN:
-                    continue
-                
-                # Bounding box
-                x, y, w, h = cv2.boundingRect(contour)
+        sonuc = frame_isle(frame)
+        rgb = cv2.cvtColor(sonuc, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        pix = QPixmap.fromImage(qimg)
+        self.video_label.setPixmap(
+            pix.scaled(
+                self.video_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
 
-                # Geometrik kalite filtresi
-                if h == 0 or w == 0:
-                    continue
-                oran = w / float(h)
-                doluluk = alan / float(w * h)
-                if oran < 0.25 or oran > 4.0:
-                    continue
-                if doluluk < 0.35:
-                    continue
-                
-                # Kare çiz
-                cv2.rectangle(frame, (x, y), (x + w, y + h), renk_bilgisi["BGR"], 2)
-                
-                # Renk adını yaz
-                cv2.putText(frame, renk_adi, (x, y - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, renk_bilgisi["BGR"], 2)
-                
-                # Alan bilgisini yaz
-                cv2.putText(frame, f"Alan: {alan:.0f}", (x, y + h + 20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, renk_bilgisi["BGR"], 1)
-        
-        # Yardım metni
-        cv2.putText(frame, "q: Cik", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-        
-        # Ekranda göster
-        cv2.imshow("Nesne Takip Sistemi", frame)
-        
-        # Tuş kontrolü
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("\nUygulama kapatılıyor...")
-            break
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Sistem kapatıldı.")
+    def closeEvent(self, event):
+        self.kamerayi_durdur()
+        event.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    pencere = RenkTakipPenceresi()
+    pencere.show()
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
