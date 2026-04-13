@@ -35,7 +35,7 @@ RENKLER = {
         "BGR": (203, 192, 255),
     },
     "Kahverengi": {
-        "ranges": [(np.array([8, 90, 40]), np.array([22, 255, 180]))],
+        "ranges": [(np.array([8, 110, 35]), np.array([20, 255, 160]))],
         "BGR": (42, 42, 165),
     },
 }

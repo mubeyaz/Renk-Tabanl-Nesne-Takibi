@@ -33,6 +33,11 @@ def cilt_maskesi_olustur(frame):
     return skin
 
 
+def cilt_maskesini_cikar(mask, cilt_maskesi):
+    """Cilt tonlariyla cakisan bolgeleri maskeden cikarir."""
+    return cv2.bitwise_and(mask, cv2.bitwise_not(cilt_maskesi))
+
+
 def maskeyi_iyilestir(mask):
     """Ham maskeyi kontur cikarmaya uygun hale getirmek icin morfolojik filtre uygular."""
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

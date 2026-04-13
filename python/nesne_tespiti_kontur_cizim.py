@@ -9,6 +9,7 @@ import cv2
 
 from goruntu_isleme_filtreleme import (
     cilt_maskesi_olustur,
+    cilt_maskesini_cikar,
     maskeyi_iyilestir,
     renk_maskesi_olustur,
 )
@@ -34,9 +35,9 @@ def frame_isle(frame):
         # Her renk icin ilgili HSV araliklari tek maske haline getirilir.
         mask = renk_maskesi_olustur(hsv, renk_bilgisi["ranges"])
 
-        # Kirmizi tonlarinda cilt kaynakli yalanci pozitifleri azaltmak icin cilt maskesi cikarilir.
-        if renk_adi == "Kirmizi":
-            mask = cv2.bitwise_and(mask, cv2.bitwise_not(cilt_maskesi))
+        # Cilt tonlariyla cakisan renklerde yalanci pozitifleri azaltmak icin cilt maskesi cikarilir.
+        if renk_adi in ("Kirmizi", "Kahverengi"):
+            mask = cilt_maskesini_cikar(mask, cilt_maskesi)
 
         mask = maskeyi_iyilestir(mask)
 
